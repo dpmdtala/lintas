@@ -1,0 +1,17 @@
+<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>LINTAS API Bridge</title></head><body><script>
+(function(){
+  'use strict';
+  // Allow only the exact GitHub Pages origin for this repository.
+  var ALLOWED_ORIGIN='https://dpmdtala.github.io';
+  var ALLOWED=new Set(['login','logout','getInitialData','getOfficialStatuses','getPublicPageUrl','getServerClock','listIncoming','listOutgoing','listVisitorsForFrontOffice','saveIncoming','saveOfficialStatus','saveOutgoing','getScanUrl','updateIncomingStatus','getIncomingSummaryForSiap','getDailyIncomingSummaryForSiap','sendIncomingSummaryToSiap','getIkmQuarterlyReport','generateIkmAnalysis']);
+  function reply(target,id,ok,result){target.postMessage({channel:'LINTAS_BRIDGE_V1',id:id,ok:ok,result:ok?result:undefined,error:ok?undefined:String(result&&result.message||result||'Permintaan gagal')},ALLOWED_ORIGIN);}
+  window.addEventListener('message',function(ev){
+    if(ev.origin!==ALLOWED_ORIGIN||ev.source!==window.parent)return;
+    var m=ev.data;if(!m||m.channel!=='LINTAS_BRIDGE_V1'||typeof m.id!=='string'||!ALLOWED.has(m.fn)||!Array.isArray(m.args))return;
+    if(m.args.length>8)return reply(ev.source,m.id,false,'Jumlah argumen tidak valid.');
+    var runner=google.script.run.withSuccessHandler(function(v){reply(ev.source,m.id,true,v);}).withFailureHandler(function(e){reply(ev.source,m.id,false,e);});
+    try{var fn=runner[m.fn];if(typeof fn!=='function')return reply(ev.source,m.id,false,'Fungsi backend tidak ditemukan: '+m.fn);fn.apply(runner,m.args);}catch(e){reply(ev.source,m.id,false,e);}
+  });
+  window.parent.postMessage({channel:'LINTAS_BRIDGE_READY'},ALLOWED_ORIGIN);
+})();
+</script></body></html>
