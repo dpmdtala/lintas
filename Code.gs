@@ -55,15 +55,34 @@ const LINTAS = {
   }
 };
 
+
 function doGet(e) {
-  const page = e && e.parameter ? String(e.parameter.page || '') : '';
-  if (page === 'guest') return HtmlService.createHtmlOutput(publicGuestFormHtml_())
+  const page = e && e.parameter
+    ? e.parameter.page
+    : '';
+
+  // BRIDGE: jembatan postMessage untuk frontend GitHub Pages.
+  // ALLOWALL diperlukan agar halaman bridge dapat dimuat di iframe GitHub Pages.
+  // Keamanan tetap harus ditegakkan di Bridge.html (origin + allowlist fungsi)
+  // dan setiap fungsi backend tetap memvalidasi token/role melalui requireSession_.
+  if (page === 'bridge') {
+    return HtmlService.createHtmlOutputFromFile('Bridge')
+      .setTitle('LINTAS API Bridge')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  }
+
+  // RUTE LAMA: PERTAHANKAN KODE ASLI ANDA
+ if (page === 'guest') return HtmlService.createHtmlOutput(publicGuestFormHtml_())
     .setTitle('Buku Tamu Elektronik — DPMD Kabupaten Tanah Laut')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
+
   if (page === 'ikm') return HtmlService.createHtmlOutput(publicIkmFormHtml_())
     .setTitle('Survei Kepuasan Masyarakat — DPMD Kabupaten Tanah Laut')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
-  return HtmlService.createTemplateFromFile('Index').evaluate()
+
+  // Pertahankan return halaman utama dan rute lainnya.
+ return HtmlService.createTemplateFromFile('Index').evaluate()
     .setTitle(LINTAS.APP_NAME)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
@@ -856,40 +875,81 @@ function sendIncomingSummaryToSiap(payload, token) {
 }
 
 function latestCompletedThreeHourPeriod_() {
+  // Blok harian dimulai pukul 08.00 WITA:
+  // 08-11, 11-14, 14-17, 17-20, dan 20-23.
+  // Sebelum pukul 11.00, periode terakhir yang selesai adalah 20-23 hari sebelumnya.
   const now = new Date();
   const localDate = Utilities.formatDate(now, LINTAS.TZ, 'yyyy-MM-dd');
   const localHour = Number(Utilities.formatDate(now, LINTAS.TZ, 'H'));
-  const boundaryHour = Math.floor(localHour / 3) * 3;
-  let startDate = localDate, startHour = boundaryHour - 3;
-  if (boundaryHour === 0) {
-    const midnight = new Date(localDate + 'T00:00:00+08:00');
-    midnight.setDate(midnight.getDate() - 1);
-    startDate = Utilities.formatDate(midnight, LINTAS.TZ, 'yyyy-MM-dd');
-    startHour = 21;
+  let startDate = localDate;
+  let startHour;
+
+  if (localHour < 11) {
+    const todayMidnight = new Date(localDate + 'T00:00:00+08:00');
+    const previousDay = new Date(todayMidnight.getTime() - 24 * 60 * 60 * 1000);
+    startDate = Utilities.formatDate(previousDay, LINTAS.TZ, 'yyyy-MM-dd');
+    startHour = 20;
+  } else if (localHour < 14) {
+    startHour = 8;
+  } else if (localHour < 17) {
+    startHour = 11;
+  } else if (localHour < 20) {
+    startHour = 14;
+  } else if (localHour < 23) {
+    startHour = 17;
+  } else {
+    startHour = 20;
   }
+
   return buildThreeHourPeriod_(startDate, startHour);
 }
+
 function selectedThreeHourPeriod_(options) {
   options = options || {};
   const date = clean_(options.tanggal);
   const hourText = clean_(options.jamMulai);
   if (!date || !hourText) return latestCompletedThreeHourPeriod_();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('Tanggal periode tidak valid.');
-  const hour = Number(hourText.slice(0,2));
-  if (![0,3,6,9,12,15,18,21].includes(hour)) throw new Error('Blok periode harus dimulai pada jam 00, 03, 06, 09, 12, 15, 18, atau 21 WITA.');
-  const p = buildThreeHourPeriod_(date, hour);
-  return p; // Rekap boleh dibaca untuk periode server mana pun; validasi selesai dilakukan khusus saat pengiriman.
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error('Tanggal periode tidak valid. Gunakan format YYYY-MM-DD.');
+  }
+  const parsedDate = new Date(date + 'T00:00:00+08:00');
+  if (isNaN(parsedDate.getTime()) || Utilities.formatDate(parsedDate, LINTAS.TZ, 'yyyy-MM-dd') !== date) {
+    throw new Error('Tanggal periode tidak valid.');
+  }
+
+  const hour = Number(hourText.slice(0, 2));
+  if (![8, 11, 14, 17, 20].includes(hour)) {
+    throw new Error('Blok periode harus dimulai pada pukul 08, 11, 14, 17, atau 20 WITA.');
+  }
+
+  // Rekap dapat ditampilkan untuk tanggal/blok yang dipilih.
+  // sendIncomingSummaryToSiap tetap menolak pengiriman sebelum periode selesai.
+  return buildThreeHourPeriod_(date, hour);
 }
+
 function buildThreeHourPeriod_(date, startHour) {
-  const endDate = date;
-  const endHour = startHour + 3;
-  const start = new Date(date + 'T' + String(startHour).padStart(2,'0') + ':00:00+08:00');
-  const end = endHour === 24 ? new Date(new Date(date + 'T00:00:00+08:00').getTime()+24*60*60*1000) : new Date(date + 'T' + String(endHour).padStart(2,'0') + ':00:00+08:00');
-  const jamMulai = String(startHour).padStart(2,'0') + ':00';
-  const jamSelesai = endHour === 24 ? '23:59' : String(endHour).padStart(2,'0') + ':00';
-  const id = 'LINTAS-' + date.replace(/-/g,'') + '-' + jamMulai.replace(':','') + '-' + jamSelesai.replace(':','');
-  return {start:start,end:end,tanggal:date,jamMulai:jamMulai,jamSelesai:jamSelesai,id:id,
-    label:Utilities.formatDate(start,LINTAS.TZ,'dd-MM-yyyy HH:mm')+'–'+Utilities.formatDate(end,LINTAS.TZ,'HH:mm')+' WITA'};
+  if (![8, 11, 14, 17, 20].includes(Number(startHour))) {
+    throw new Error('Jam mulai blok rekap tidak valid.');
+  }
+
+  const endHour = Number(startHour) + 3;
+  const start = new Date(date + 'T' + String(startHour).padStart(2, '0') + ':00:00+08:00');
+  const end = new Date(date + 'T' + String(endHour).padStart(2, '0') + ':00:00+08:00');
+  const jamMulai = String(startHour).padStart(2, '0') + ':00';
+  const jamSelesai = String(endHour).padStart(2, '0') + ':00';
+  const id = 'LINTAS-' + date.replace(/-/g, '') + '-' + jamMulai.replace(':', '') + '-' + jamSelesai.replace(':', '');
+
+  return {
+    start: start,
+    end: end,
+    tanggal: date,
+    jamMulai: jamMulai,
+    jamSelesai: jamSelesai,
+    id: id,
+    label: Utilities.formatDate(start, LINTAS.TZ, 'dd-MM-yyyy HH:mm') + '–' +
+      Utilities.formatDate(end, LINTAS.TZ, 'HH:mm') + ' WITA'
+  };
 }
 function incomingInPeriod_(r, start, end) {
   // rowToObject_ normalizes date cells, but a time cell may arrive as a Date object
