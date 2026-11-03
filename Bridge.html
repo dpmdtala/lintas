@@ -1,112 +1,107 @@
-
 <!doctype html>
 <html lang="id">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>LINTAS API Bridge</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LINTAS API Bridge</title>
 </head>
 <body>
 <script>
 (function () {
   'use strict';
 
+  // Hanya origin GitHub Pages resmi LINTAS yang boleh menjalankan fungsi backend.
   var ALLOWED_ORIGIN = 'https://dpmdtala.github.io';
 
   var ALLOWED = new Set([
-    'login','logout','getInitialData','getOfficialStatuses',
-    'getPublicPageUrl','getServerClock','listIncoming','listOutgoing',
-    'listVisitorsForFrontOffice','saveIncoming','saveOfficialStatus',
-    'saveOutgoing','getScanUrl','updateIncomingStatus',
-    'getIncomingSummaryForSiap','getDailyIncomingSummaryForSiap',
-    'sendIncomingSummaryToSiap','getIkmQuarterlyReport',
+    'login', 'logout', 'getInitialData', 'getOfficialStatuses',
+    'getPublicPageUrl', 'getServerClock', 'listIncoming', 'listOutgoing',
+    'listVisitorsForFrontOffice', 'saveIncoming', 'saveOfficialStatus',
+    'saveOutgoing', 'getScanUrl', 'updateIncomingStatus',
+    'getIncomingSummaryForSiap', 'getDailyIncomingSummaryForSiap',
+    'sendIncomingSummaryToSiap', 'getIkmQuarterlyReport',
     'generateIkmAnalysis'
   ]);
 
+  function send(target, origin, data) {
+    // Pesan diagnostik tidak membawa data aplikasi atau token.
+    target.postMessage(data, origin === 'null' ? '*' : origin);
+  }
+
   function reply(target, origin, id, ok, value) {
-    target.postMessage({
+    send(target, origin, {
       channel: 'LINTAS_BRIDGE_V1',
       id: id,
       ok: ok,
       result: ok ? value : undefined,
-      error: ok ? undefined :
-        String(value && value.message || value || 'Permintaan gagal')
-    }, origin);
+      error: ok ? undefined : String(value && value.message || value || 'Permintaan gagal')
+    });
   }
 
-  function ready(origin) {
-    window.parent.postMessage({
-      channel: 'LINTAS_BRIDGE_READY'
-    }, origin);
+  function ready(target, origin) {
+    send(target, origin, { channel: 'LINTAS_BRIDGE_READY' });
   }
 
   window.addEventListener('message', function (ev) {
-    // Hanya menerima pesan dari jendela induk langsung.
+    // Hanya jendela induk langsung yang boleh mengirim perintah.
     if (ev.source !== window.parent) return;
-
     var m = ev.data;
     if (!m) return;
 
-    // Diagnosis: laporkan origin yang benar-benar diterima.
-    // Pesan ini hanya dikirim kembali kepada pengirimnya.
+    // Beri tahu parent jika origin aktual berbeda. Pesan ini hanya diagnostik.
     if (ev.origin !== ALLOWED_ORIGIN) {
       if (m.channel === 'LINTAS_BRIDGE_PING') {
-        ev.source.postMessage({
+        send(ev.source, ev.origin, {
           channel: 'LINTAS_BRIDGE_DIAGNOSTIC',
           receivedOrigin: ev.origin,
           expectedOrigin: ALLOWED_ORIGIN
-        }, ev.origin);
+        });
       }
       return;
     }
 
     if (m.channel === 'LINTAS_BRIDGE_PING') {
-      ready(ev.origin);
+      ready(ev.source, ev.origin);
       return;
     }
 
-    if (
-      m.channel !== 'LINTAS_BRIDGE_V1' ||
-      typeof m.id !== 'string' ||
-      !ALLOWED.has(m.fn) ||
-      !Array.isArray(m.args)
-    ) return;
+    if (m.channel !== 'LINTAS_BRIDGE_V1' ||
+        typeof m.id !== 'string' ||
+        !ALLOWED.has(m.fn) ||
+        !Array.isArray(m.args)) return;
 
     if (m.args.length > 8) {
-      return reply(
-        ev.source, ev.origin, m.id, false,
-        'Jumlah argumen tidak valid.'
-      );
+      return reply(ev.source, ev.origin, m.id, false, 'Jumlah argumen tidak valid.');
     }
 
     try {
-      var runner = google.script.run
-        .withSuccessHandler(function (v) {
-          reply(ev.source, ev.origin, m.id, true, v);
-        })
-        .withFailureHandler(function (e) {
-          reply(ev.source, ev.origin, m.id, false, e);
-        });
-
-      var fn = runner[m.fn];
-
-      if (typeof fn !== 'function') {
-        return reply(
-          ev.source, ev.origin, m.id, false,
-          'Fungsi backend tidak ditemukan: ' + m.fn
-        );
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        return reply(ev.source, ev.origin, m.id, false,
+          'google.script.run tidak tersedia. Pastikan Bridge dibuka melalui URL Web App /exec?page=bridge.');
       }
 
-      fn.apply(runner, m.args);
+      var runner = google.script.run
+        .withSuccessHandler(function (value) {
+          reply(ev.source, ev.origin, m.id, true, value);
+        })
+        .withFailureHandler(function (error) {
+          reply(ev.source, ev.origin, m.id, false, error);
+        });
 
-    } catch (e) {
-      reply(ev.source, ev.origin, m.id, false, e);
+      if (typeof runner[m.fn] !== 'function') {
+        return reply(ev.source, ev.origin, m.id, false,
+          'Fungsi backend tidak ditemukan: ' + m.fn);
+      }
+
+      // Apps Script runner adalah proxy; panggil langsung, bukan Function.apply.
+      runner[m.fn](...m.args);
+    } catch (error) {
+      reply(ev.source, ev.origin, m.id, false, error);
     }
   });
 
-  // Pengiriman READY awal.
-  ready(ALLOWED_ORIGIN);
-
+  // READY awal bersifat best-effort; frontend juga mengirim PING berkala.
+  ready(window.parent, ALLOWED_ORIGIN);
 })();
 </script>
 </body>
